@@ -7,10 +7,10 @@ import { StatsModal } from './components/StatsModal.tsx';
 import { Chat } from './components/Chat.tsx';
 import { useGameLogic } from './hooks/useGameLogic.ts';
 import { GameMode, ChatMessage, NetworkMessage } from './types.ts';
-import { Trophy, Home, RotateCcw, BarChart3, MessageSquare, Wifi, WifiOff, Activity } from 'lucide-react';
+import { Trophy, Home, RotateCcw, BarChart3, MessageSquare, Wifi, WifiOff, Activity, ShieldCheck } from 'lucide-react';
 
-// Using a public community relay for demo purposes. 
-const WEBSOCKET_URL = "wss://api.piesocket.com/v3/community?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVjgZ9VRiaV";
+// Declaration for global PeerJS from CDN
+declare const Peer: any;
 
 export default function App() {
   const [mode, setMode] = useState<GameMode>('LOBBY');
@@ -22,7 +22,8 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [localPlayer, setLocalPlayer] = useState<'X' | 'O' | null>(null);
 
-  const socketRef = useRef<WebSocket | null>(null);
+  const peerRef = useRef<any>(null);
+  const connRef = useRef<any>(null);
   
   const {
     board,
@@ -35,170 +36,138 @@ export default function App() {
     syncState
   } = useGameLogic();
 
-  // Use refs to avoid stale closures in WebSocket event listeners
-  const stateRef = useRef({
-    nexusId,
-    remoteNexusId,
-    localPlayer,
-    board,
-    xIsNext,
-    winner,
-    winningLine,
-    scores
+  // CRITICAL: Logic Ref Pattern
+  // PeerJS listeners are defined once, but makeMove/resetGame change every render.
+  // We use a Ref to always provide the listener with the LATEST functions.
+  const logicRef = useRef({
+    makeMove,
+    resetGame,
+    syncState,
+    setMessages,
+    setMode,
+    setIsConnected,
+    setLocalPlayer
   });
 
   useEffect(() => {
-    stateRef.current = {
-      nexusId,
-      remoteNexusId,
-      localPlayer,
-      board,
-      xIsNext,
-      winner,
-      winningLine,
-      scores
+    logicRef.current = {
+      makeMove,
+      resetGame,
+      syncState,
+      setMessages,
+      setMode,
+      setIsConnected,
+      setLocalPlayer
     };
-  }, [nexusId, remoteNexusId, localPlayer, board, xIsNext, winner, winningLine, scores]);
+  }, [makeMove, resetGame, syncState]);
 
-  // Generate a random Nexus ID on mount
+  // PeerJS Initialization
   useEffect(() => {
-    const id = Math.random().toString(36).substring(2, 8).toUpperCase();
-    setNexusId(id);
-  }, []);
+    const initPeer = () => {
+      const peer = new Peer();
+      peerRef.current = peer;
 
-  // WebSocket lifecycle management
-  useEffect(() => {
-    const connectSocket = () => {
-      console.log('Attempting Nexus Connection...');
-      const socket = new WebSocket(WEBSOCKET_URL);
-      socketRef.current = socket;
+      peer.on('open', (id: string) => {
+        setNexusId(id);
+        console.log('Nexus Node Online:', id);
+      });
 
-      socket.onopen = () => {
-        console.log('Nexus Socket Established');
-        setIsConnected(true);
-      };
+      peer.on('connection', (conn: any) => {
+        console.log('Incoming connection from:', conn.peer);
+        if (connRef.current) connRef.current.close();
+        
+        connRef.current = conn;
+        logicRef.current.setLocalPlayer('X');
+        logicRef.current.setMode('ONLINE_HOST');
+        setupListeners(conn);
+      });
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          processIncomingMessage(data);
-        } catch (e) {
-          // Ignore non-JSON relay clutter
+      peer.on('error', (err: any) => {
+        console.error('Peer Protocol Error:', err);
+        if (err.type === 'peer-disconnected') setIsConnected(false);
+      });
+    };
+
+    // Check for Peer object (CDN load)
+    if (typeof Peer === 'undefined') {
+      const check = setInterval(() => {
+        if (typeof Peer !== 'undefined') {
+          initPeer();
+          clearInterval(check);
         }
-      };
-
-      socket.onclose = () => {
-        console.warn('Nexus Socket Lost. Re-routing...');
-        setIsConnected(false);
-        setTimeout(connectSocket, 3000);
-      };
-
-      socket.onerror = (err) => {
-        console.error('Nexus Protocol Error:', err);
-      };
-    };
-
-    connectSocket();
+      }, 100);
+    } else {
+      initPeer();
+    }
 
     return () => {
-      if (socketRef.current) socketRef.current.close();
+      if (peerRef.current) peerRef.current.destroy();
     };
   }, []);
 
-  const processIncomingMessage = (data: any) => {
-    const { nexusId: myId, remoteNexusId: targetId, localPlayer: myRole } = stateRef.current;
-    
-    // 1. Identify if this message belongs to our current active room
-    // The "Room ID" is always the Host's Nexus ID.
-    const activeRoomId = myRole === 'X' ? myId : targetId;
-    
-    if (data.roomId !== activeRoomId && data.type !== 'JOIN_REQUEST') return;
-    
-    // 2. Prevent processing our own echoed messages
-    if (data.senderId === myId) return;
+  const setupListeners = (conn: any) => {
+    conn.on('open', () => {
+      console.log('Data channel established');
+      setIsConnected(true);
+    });
 
-    console.log('📡 Signal Received:', data.type, data.payload);
+    conn.on('data', (data: NetworkMessage) => {
+      console.log('Signal Received:', data.type, data.payload);
+      switch (data.type) {
+        case 'MOVE':
+          logicRef.current.makeMove(data.payload.index);
+          break;
+        case 'RESET':
+          logicRef.current.resetGame();
+          break;
+        case 'CHAT':
+          logicRef.current.setMessages(prev => [...prev, data.payload]);
+          break;
+        case 'SYNC_STATE':
+          logicRef.current.syncState(data.payload);
+          break;
+      }
+    });
 
-    switch (data.type) {
-      case 'JOIN_REQUEST':
-        // Someone entered our ID to join us
-        if (data.roomId === myId) {
-          setLocalPlayer('X');
-          setRemoteNexusId(data.senderId);
-          setMode('ONLINE_HOST');
-          sendSocketMessage('JOIN_ACK', { board: stateRef.current.board }, myId);
-        }
-        break;
-
-      case 'JOIN_ACK':
-        // Host accepted our link
-        setMode('ONLINE_JOIN');
-        if (data.payload.board) syncState({ board: data.payload.board });
-        break;
-
-      case 'MOVE':
-        makeMove(data.payload.index);
-        break;
-
-      case 'RESET':
-        resetGame();
-        break;
-
-      case 'CHAT':
-        setMessages(prev => [...prev, data.payload]);
-        break;
-        
-      case 'SYNC_REQUEST':
-        sendSocketMessage('SYNC_DATA', { 
-          board: stateRef.current.board,
-          scores: stateRef.current.scores,
-          xIsNext: stateRef.current.xIsNext 
-        }, activeRoomId);
-        break;
-
-      case 'SYNC_DATA':
-        syncState(data.payload);
-        break;
-    }
+    conn.on('close', () => {
+      console.log('Remote peer disconnected');
+      setIsConnected(false);
+      logicRef.current.setMode('LOBBY');
+      connRef.current = null;
+    });
   };
 
-  const sendSocketMessage = (type: string, payload: any, roomId: string) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify({
-        type,
-        payload,
-        roomId,
-        senderId: nexusId,
-        timestamp: Date.now()
-      }));
-    }
-  };
-
-  const handleJoin = () => {
-    if (!remoteNexusId) return;
+  const handleConnect = () => {
+    if (!remoteNexusId || !peerRef.current) return;
+    
+    console.log('Connecting to remote Node:', remoteNexusId);
+    const conn = peerRef.current.connect(remoteNexusId);
+    connRef.current = conn;
     setLocalPlayer('O');
-    // We send a join request targeted at the Host's ID
-    sendSocketMessage('JOIN_REQUEST', {}, remoteNexusId);
+    setMode('ONLINE_JOIN');
+    setupListeners(conn);
   };
 
   const handleSquareClick = (index: number) => {
+    // Turn enforcement
     if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
       const currentPlayerMark = xIsNext ? 'X' : 'O';
       if (currentPlayerMark !== localPlayer) return;
     }
 
     const moveResult = makeMove(index);
-    if (moveResult && (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN')) {
-      const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
-      sendSocketMessage('MOVE', { index }, activeRoom);
+    if (moveResult && connRef.current && connRef.current.open) {
+      connRef.current.send({
+        type: 'MOVE',
+        payload: { index }
+      });
     }
   };
 
   const handleReset = () => {
     resetGame();
-    if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
-      const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
-      sendSocketMessage('RESET', {}, activeRoom);
+    if (connRef.current && connRef.current.open) {
+      connRef.current.send({ type: 'RESET' });
     }
   };
 
@@ -212,8 +181,9 @@ export default function App() {
     };
     
     setMessages(prev => [...prev, msg]);
-    const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
-    sendSocketMessage('CHAT', msg, activeRoom);
+    if (connRef.current && connRef.current.open) {
+      connRef.current.send({ type: 'CHAT', payload: msg });
+    }
   };
 
   const isMyTurn = () => {
@@ -224,7 +194,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col items-center justify-center p-4 relative overflow-hidden font-rajdhani">
-      {/* Background Neon Glows */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/5 blur-[120px] rounded-full"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/5 blur-[120px] rounded-full"></div>
 
@@ -246,7 +215,7 @@ export default function App() {
               peerId={nexusId}
               remoteId={remoteNexusId}
               setRemoteId={setRemoteNexusId}
-              onConnect={handleJoin}
+              onConnect={handleConnect}
             />
           </motion.div>
         ) : (
@@ -260,9 +229,8 @@ export default function App() {
             <header className="w-full flex justify-between items-center mb-8 px-4">
               <button 
                 onClick={() => {
+                  if (connRef.current) connRef.current.close();
                   setMode('LOBBY');
-                  setLocalPlayer(null);
-                  setRemoteNexusId('');
                 }}
                 className="p-3 rounded-xl glass-panel hover:bg-white/10 transition-all group"
               >
@@ -280,7 +248,7 @@ export default function App() {
                 </div>
                 <div className="text-[10px] uppercase tracking-[0.4em] text-slate-500 font-bold mt-1 flex items-center gap-2">
                   <Activity className="w-3 h-3" />
-                  Grid Protocol Active
+                  P2P Secure Tunnel
                 </div>
               </div>
 
@@ -303,7 +271,8 @@ export default function App() {
             </div>
 
             {(mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') && (
-               <div className="mb-6 h-6">
+               <div className="mb-6 h-6 flex items-center gap-2">
+                  {isConnected && <ShieldCheck className="w-4 h-4 text-green-500" />}
                   <span className={`text-xs font-bold tracking-[0.3em] uppercase transition-all duration-300 ${isMyTurn() ? 'text-green-400 neon-text-green' : 'text-slate-600'}`}>
                     {isMyTurn() ? ">> Your Turn to Strike <<" : "Opponent Tactical Phase..."}
                   </span>
@@ -351,19 +320,16 @@ export default function App() {
                     animate={{ scale: 1, y: 0 }}
                     className="glass-panel p-12 rounded-[2rem] border-2 border-white/10 text-center max-w-sm w-full mx-4 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
                   >
-                    <div className="mb-6 relative">
-                       <Trophy className={`w-24 h-24 mx-auto ${winner === 'X' ? 'text-cyan-400 drop-shadow-[0_0_20px_rgba(0,240,255,0.6)]' : winner === 'O' ? 'text-purple-400 drop-shadow-[0_0_20px_rgba(139,92,246,0.6)]' : 'text-slate-400'}`} />
-                       <div className="absolute inset-0 bg-white/5 blur-3xl rounded-full -z-10" />
-                    </div>
-                    <h2 className="text-5xl font-black font-orbitron mb-2 tracking-tighter italic bg-gradient-to-b from-white to-white/60 bg-clip-text text-transparent">
+                    <Trophy className={`w-24 h-24 mx-auto mb-6 ${winner === 'X' ? 'text-cyan-400 drop-shadow-[0_0_20px_rgba(0,240,255,0.6)]' : winner === 'O' ? 'text-purple-400 drop-shadow-[0_0_20px_rgba(139,92,246,0.6)]' : 'text-slate-400'}`} />
+                    <h2 className="text-5xl font-black font-orbitron mb-2 tracking-tighter italic">
                       {winner === 'DRAW' ? "DRAW" : "VICTORY"}
                     </h2>
                     <p className="text-slate-500 mb-10 tracking-[0.4em] uppercase text-[10px] font-bold">
-                      {winner === 'DRAW' ? "Tactical Parity Reached" : `Player ${winner} has dominated the grid`}
+                      Match Sequence Terminated
                     </p>
                     <button
                       onClick={handleReset}
-                      className="w-full py-5 rounded-2xl bg-white text-slate-950 font-black font-orbitron tracking-widest text-xs hover:bg-cyan-400 hover:shadow-[0_0_20px_rgba(0,240,255,0.5)] transition-all active:scale-95 italic"
+                      className="w-full py-5 rounded-2xl bg-white text-slate-950 font-black font-orbitron tracking-widest text-xs hover:bg-cyan-400 transition-all active:scale-95 italic"
                     >
                       ENGAGE NEW ROUND
                     </button>
