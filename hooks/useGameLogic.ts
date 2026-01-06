@@ -24,28 +24,49 @@ export const useGameLogic = () => {
   };
 
   const makeMove = useCallback((index: number) => {
-    if (board[index] || winner) return null;
+    let moveSuccessful = false;
+    let markApplied: PlayerMark = null;
 
-    const newBoard = [...board];
-    const currentMark = xIsNext ? 'X' : 'O';
-    newBoard[index] = currentMark;
-    
-    setBoard(newBoard);
-    const result = calculateWinner(newBoard);
-    
-    if (result) {
-      setWinner(result.winner);
-      setWinningLine(result.line);
-      setScores(prev => ({
-        ...prev,
-        [result.winner]: prev[result.winner as keyof typeof prev] + 1
-      }));
-    } else {
-      setXIsNext(!xIsNext);
-    }
+    setBoard((prevBoard) => {
+      // If square taken or game over, do nothing
+      if (prevBoard[index] || calculateWinner(prevBoard)) {
+        return prevBoard;
+      }
 
-    return { index, mark: currentMark };
-  }, [board, xIsNext, winner]);
+      const newBoard = [...prevBoard];
+      // Determine mark based on xIsNext state
+      // We can't rely on the xIsNext variable from the outer scope easily here, 
+      // so we manage it carefully.
+      return newBoard; 
+    });
+
+    // Actually, to keep it simple and sync-safe, we'll use a unified state setter
+    setBoard((prevBoard) => {
+      if (prevBoard[index]) return prevBoard;
+      
+      const newBoard = [...prevBoard];
+      const currentMark = xIsNext ? 'X' : 'O';
+      newBoard[index] = currentMark;
+      markApplied = currentMark;
+      
+      const result = calculateWinner(newBoard);
+      if (result) {
+        setWinner(result.winner);
+        setWinningLine(result.line);
+        setScores(prevScores => ({
+          ...prevScores,
+          [result.winner]: prevScores[result.winner as keyof typeof prevScores] + 1
+        }));
+      } else {
+        setXIsNext(prev => !prev);
+      }
+      
+      moveSuccessful = true;
+      return newBoard;
+    });
+
+    return moveSuccessful ? { index, mark: markApplied } : null;
+  }, [xIsNext]); // Only depend on xIsNext, the rest is handled via functional updates
 
   const resetGame = useCallback(() => {
     setBoard(INITIAL_BOARD);
@@ -59,6 +80,7 @@ export const useGameLogic = () => {
     if (state.xIsNext !== undefined) setXIsNext(state.xIsNext);
     if (state.winner !== undefined) setWinner(state.winner);
     if (state.winningLine !== undefined) setWinningLine(state.winningLine);
+    if (state.scores !== undefined) setScores(state.scores as any);
   }, []);
 
   return {

@@ -92,7 +92,7 @@ export const Lobby: React.FC<LobbyProps> = ({
             <div className="space-y-2">
               <label className="text-xs uppercase tracking-widest text-slate-500 ml-1">Your Nexus ID</label>
               <div className="flex gap-2">
-                <div className="flex-1 px-4 py-3 rounded-xl bg-slate-900/50 border border-white/5 font-mono text-sm text-cyan-300 flex items-center">
+                <div className="flex-1 px-4 py-3 rounded-xl bg-slate-900/50 border border-white/5 font-mono text-sm text-cyan-300 flex items-center overflow-hidden">
                   {peerId || 'Initializing...'}
                 </div>
                 <button 
@@ -123,7 +123,7 @@ export const Lobby: React.FC<LobbyProps> = ({
                 />
                 <button 
                   onClick={onConnect}
-                  disabled={!remoteId}
+                  disabled={!remoteId || !peerId}
                   className="px-6 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-30 disabled:hover:bg-purple-600 font-bold transition-all text-white shadow-lg shadow-purple-600/20 active:scale-95"
                 >
                   LINK
@@ -135,7 +135,7 @@ export const Lobby: React.FC<LobbyProps> = ({
       </div>
 
       <motion.div variants={itemVariants} className="text-center">
-        <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em]">v3.0.0 Secure WebSocket Protocol</p>
+        <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em]">v3.5.0 P2P Encrypted Protocol</p>
       </motion.div>
     </motion.div>
   );
