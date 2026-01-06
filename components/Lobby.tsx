@@ -90,7 +90,7 @@ export const Lobby: React.FC<LobbyProps> = ({
 
           <div className="space-y-4">
             <div className="space-y-2">
-              <label className="text-xs uppercase tracking-widest text-slate-500 ml-1">Your Terminal ID</label>
+              <label className="text-xs uppercase tracking-widest text-slate-500 ml-1">Your Nexus ID</label>
               <div className="flex gap-2">
                 <div className="flex-1 px-4 py-3 rounded-xl bg-slate-900/50 border border-white/5 font-mono text-sm text-cyan-300 flex items-center">
                   {peerId || 'Initializing...'}
@@ -112,13 +112,13 @@ export const Lobby: React.FC<LobbyProps> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs uppercase tracking-widest text-slate-500 ml-1">Target Terminal ID</label>
+              <label className="text-xs uppercase tracking-widest text-slate-500 ml-1">Target Nexus ID</label>
               <div className="flex gap-2">
                 <input 
                   type="text"
                   value={remoteId}
                   onChange={(e) => setRemoteId(e.target.value)}
-                  placeholder="Paste Node ID here..."
+                  placeholder="Paste Nexus ID here..."
                   className="flex-1 px-4 py-3 rounded-xl bg-slate-900/50 border border-white/5 font-mono text-sm focus:outline-none focus:border-purple-500/50 focus:ring-1 focus:ring-purple-500/50 transition-all text-purple-300"
                 />
                 <button 
@@ -135,7 +135,7 @@ export const Lobby: React.FC<LobbyProps> = ({
       </div>
 
       <motion.div variants={itemVariants} className="text-center">
-        <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em]">v2.5.0 Secure WebRTC Node System</p>
+        <p className="text-slate-500 text-[10px] uppercase tracking-[0.4em]">v3.0.0 Secure WebSocket Protocol</p>
       </motion.div>
     </motion.div>
   );

@@ -7,24 +7,23 @@ import { StatsModal } from './components/StatsModal.tsx';
 import { Chat } from './components/Chat.tsx';
 import { useGameLogic } from './hooks/useGameLogic.ts';
 import { GameMode, ChatMessage, NetworkMessage } from './types.ts';
-import { Trophy, Home, RotateCcw, BarChart3, MessageSquare } from 'lucide-react';
+import { Trophy, Home, RotateCcw, BarChart3, MessageSquare, Wifi, WifiOff, Activity } from 'lucide-react';
 
-// Declaration for global PeerJS from CDN
-declare const Peer: any;
+// Using a public community relay for demo purposes. 
+const WEBSOCKET_URL = "wss://api.piesocket.com/v3/community?api_key=VCXCEuvhGcBDP7XhiJJUDvR1e1D3eiVjgZ9VRiaV";
 
 export default function App() {
   const [mode, setMode] = useState<GameMode>('LOBBY');
-  const [peerId, setPeerId] = useState<string>('');
-  const [remotePeerId, setRemotePeerId] = useState<string>('');
+  const [nexusId, setNexusId] = useState<string>('');
+  const [remoteNexusId, setRemoteNexusId] = useState<string>('');
   const [isConnected, setIsConnected] = useState(false);
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [localPlayer, setLocalPlayer] = useState<'X' | 'O' | null>(null);
 
-  const peerRef = useRef<any>(null);
-  const connRef = useRef<any>(null);
-
+  const socketRef = useRef<WebSocket | null>(null);
+  
   const {
     board,
     xIsNext,
@@ -36,141 +35,170 @@ export default function App() {
     syncState
   } = useGameLogic();
 
-  // STALE CLOSURE FIX: Use refs to hold the latest game logic functions.
-  // PeerJS listeners are attached once and don't re-render, so they need 
-  // stable references to the latest state/functions.
-  const logicRefs = useRef({
-    makeMove,
-    resetGame,
-    syncState,
-    setMessages
+  // Use refs to avoid stale closures in WebSocket event listeners
+  const stateRef = useRef({
+    nexusId,
+    remoteNexusId,
+    localPlayer,
+    board,
+    xIsNext,
+    winner,
+    winningLine,
+    scores
   });
 
-  // Keep refs updated with every render
   useEffect(() => {
-    logicRefs.current = {
-      makeMove,
-      resetGame,
-      syncState,
-      setMessages
+    stateRef.current = {
+      nexusId,
+      remoteNexusId,
+      localPlayer,
+      board,
+      xIsNext,
+      winner,
+      winningLine,
+      scores
     };
-  }, [makeMove, resetGame, syncState]);
+  }, [nexusId, remoteNexusId, localPlayer, board, xIsNext, winner, winningLine, scores]);
 
-  // PeerJS setup
+  // Generate a random Nexus ID on mount
   useEffect(() => {
-    const initializePeer = () => {
-      const peer = new Peer();
-      peerRef.current = peer;
+    const id = Math.random().toString(36).substring(2, 8).toUpperCase();
+    setNexusId(id);
+  }, []);
 
-      peer.on('open', (id: string) => {
-        setPeerId(id);
-      });
+  // WebSocket lifecycle management
+  useEffect(() => {
+    const connectSocket = () => {
+      console.log('Attempting Nexus Connection...');
+      const socket = new WebSocket(WEBSOCKET_URL);
+      socketRef.current = socket;
 
-      peer.on('connection', (conn: any) => {
-        // If we already have a connection, close it before accepting a new one
-        if (connRef.current) connRef.current.close();
-        connRef.current = conn;
-        setLocalPlayer('X');
-        setMode('ONLINE_HOST');
-        setupConnectionListeners(conn);
-      });
+      socket.onopen = () => {
+        console.log('Nexus Socket Established');
+        setIsConnected(true);
+      };
 
-      peer.on('error', (err: any) => {
-        console.error('Peer error:', err);
-      });
-    };
-
-    if (typeof Peer === 'undefined') {
-      const checkPeer = setInterval(() => {
-        if (typeof Peer !== 'undefined') {
-          initializePeer();
-          clearInterval(checkPeer);
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          processIncomingMessage(data);
+        } catch (e) {
+          // Ignore non-JSON relay clutter
         }
-      }, 100);
-      return () => clearInterval(checkPeer);
-    } else {
-      initializePeer();
-    }
+      };
+
+      socket.onclose = () => {
+        console.warn('Nexus Socket Lost. Re-routing...');
+        setIsConnected(false);
+        setTimeout(connectSocket, 3000);
+      };
+
+      socket.onerror = (err) => {
+        console.error('Nexus Protocol Error:', err);
+      };
+    };
+
+    connectSocket();
 
     return () => {
-      if (peerRef.current) peerRef.current.destroy();
+      if (socketRef.current) socketRef.current.close();
     };
   }, []);
 
-  const setupConnectionListeners = (conn: any) => {
-    conn.on('open', () => {
-      setIsConnected(true);
-      console.log('Connection established with peer');
-    });
+  const processIncomingMessage = (data: any) => {
+    const { nexusId: myId, remoteNexusId: targetId, localPlayer: myRole } = stateRef.current;
+    
+    // 1. Identify if this message belongs to our current active room
+    // The "Room ID" is always the Host's Nexus ID.
+    const activeRoomId = myRole === 'X' ? myId : targetId;
+    
+    if (data.roomId !== activeRoomId && data.type !== 'JOIN_REQUEST') return;
+    
+    // 2. Prevent processing our own echoed messages
+    if (data.senderId === myId) return;
 
-    conn.on('data', (data: NetworkMessage) => {
-      console.log('Received network data:', data);
-      switch (data.type) {
-        case 'MOVE':
-          // Use the ref to ensure we call the latest makeMove function
-          logicRefs.current.makeMove(data.payload.index);
-          break;
-        case 'RESET':
-          logicRefs.current.resetGame();
-          break;
-        case 'CHAT':
-          logicRefs.current.setMessages(prev => [...prev, data.payload]);
-          break;
-        case 'SYNC_STATE':
-          logicRefs.current.syncState(data.payload);
-          break;
-      }
-    });
+    console.log('📡 Signal Received:', data.type, data.payload);
 
-    conn.on('close', () => {
-      console.log('Connection closed');
-      setIsConnected(false);
-      setMode('LOBBY');
-      connRef.current = null;
-    });
+    switch (data.type) {
+      case 'JOIN_REQUEST':
+        // Someone entered our ID to join us
+        if (data.roomId === myId) {
+          setLocalPlayer('X');
+          setRemoteNexusId(data.senderId);
+          setMode('ONLINE_HOST');
+          sendSocketMessage('JOIN_ACK', { board: stateRef.current.board }, myId);
+        }
+        break;
 
-    conn.on('error', (err: any) => {
-      console.error('Connection error:', err);
-    });
+      case 'JOIN_ACK':
+        // Host accepted our link
+        setMode('ONLINE_JOIN');
+        if (data.payload.board) syncState({ board: data.payload.board });
+        break;
+
+      case 'MOVE':
+        makeMove(data.payload.index);
+        break;
+
+      case 'RESET':
+        resetGame();
+        break;
+
+      case 'CHAT':
+        setMessages(prev => [...prev, data.payload]);
+        break;
+        
+      case 'SYNC_REQUEST':
+        sendSocketMessage('SYNC_DATA', { 
+          board: stateRef.current.board,
+          scores: stateRef.current.scores,
+          xIsNext: stateRef.current.xIsNext 
+        }, activeRoomId);
+        break;
+
+      case 'SYNC_DATA':
+        syncState(data.payload);
+        break;
+    }
   };
 
-  const connectToPeer = () => {
-    if (!remotePeerId || !peerRef.current) return;
-    
-    // Check if we are trying to connect to ourselves
-    if (remotePeerId === peerId) {
-      alert("You cannot connect to your own Terminal ID.");
-      return;
+  const sendSocketMessage = (type: string, payload: any, roomId: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({
+        type,
+        payload,
+        roomId,
+        senderId: nexusId,
+        timestamp: Date.now()
+      }));
     }
+  };
 
-    const conn = peerRef.current.connect(remotePeerId);
-    connRef.current = conn;
+  const handleJoin = () => {
+    if (!remoteNexusId) return;
     setLocalPlayer('O');
-    setMode('ONLINE_JOIN');
-    setupConnectionListeners(conn);
+    // We send a join request targeted at the Host's ID
+    sendSocketMessage('JOIN_REQUEST', {}, remoteNexusId);
   };
 
   const handleSquareClick = (index: number) => {
-    // Basic turn checking for online modes
     if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
       const currentPlayerMark = xIsNext ? 'X' : 'O';
       if (currentPlayerMark !== localPlayer) return;
     }
 
     const moveResult = makeMove(index);
-    // If move was successful and we are in online mode, sync it
-    if (moveResult && connRef.current && connRef.current.open) {
-      connRef.current.send({
-        type: 'MOVE',
-        payload: { index }
-      });
+    if (moveResult && (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN')) {
+      const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
+      sendSocketMessage('MOVE', { index }, activeRoom);
     }
   };
 
   const handleReset = () => {
     resetGame();
-    if (connRef.current && connRef.current.open) {
-      connRef.current.send({ type: 'RESET' });
+    if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
+      const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
+      sendSocketMessage('RESET', {}, activeRoom);
     }
   };
 
@@ -183,13 +211,9 @@ export default function App() {
       timestamp: Date.now()
     };
     
-    // Add to local UI
     setMessages(prev => [...prev, msg]);
-    
-    // Send to peer
-    if (connRef.current && connRef.current.open) {
-      connRef.current.send({ type: 'CHAT', payload: msg });
-    }
+    const activeRoom = localPlayer === 'X' ? nexusId : remoteNexusId;
+    sendSocketMessage('CHAT', msg, activeRoom);
   };
 
   const isMyTurn = () => {
@@ -200,9 +224,9 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col items-center justify-center p-4 relative overflow-hidden font-rajdhani">
-      {/* Background decorations */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/10 blur-[120px] rounded-full"></div>
+      {/* Background Neon Glows */}
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/5 blur-[120px] rounded-full"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-600/5 blur-[120px] rounded-full"></div>
 
       <AnimatePresence mode="wait">
         {mode === 'LOBBY' ? (
@@ -215,14 +239,14 @@ export default function App() {
           >
             <Lobby 
               onSelectLocal={() => {
-                setLocalPlayer(null); // Reset for local
+                setLocalPlayer(null);
                 setMode('LOCAL');
               }}
               onHost={() => {}}
-              peerId={peerId}
-              remoteId={remotePeerId}
-              setRemoteId={setRemotePeerId}
-              onConnect={connectToPeer}
+              peerId={nexusId}
+              remoteId={remoteNexusId}
+              setRemoteId={setRemoteNexusId}
+              onConnect={handleJoin}
             />
           </motion.div>
         ) : (
@@ -236,8 +260,9 @@ export default function App() {
             <header className="w-full flex justify-between items-center mb-8 px-4">
               <button 
                 onClick={() => {
-                  if (connRef.current) connRef.current.close();
                   setMode('LOBBY');
+                  setLocalPlayer(null);
+                  setRemoteNexusId('');
                 }}
                 className="p-3 rounded-xl glass-panel hover:bg-white/10 transition-all group"
               >
@@ -245,8 +270,18 @@ export default function App() {
               </button>
               
               <div className="flex flex-col items-center text-center">
-                <h1 className="text-2xl font-bold tracking-widest font-orbitron neon-text-blue">NEON NEXUS</h1>
-                <div className="text-[10px] uppercase tracking-[0.3em] opacity-50">Grid Combat Protocol</div>
+                <div className="flex items-center gap-3">
+                   <h1 className="text-2xl font-black font-orbitron tracking-tighter italic neon-text-blue">NEON NEXUS</h1>
+                   {mode !== 'LOCAL' && (
+                     <div className={`p-1 rounded-full ${isConnected ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400 animate-pulse'}`}>
+                       {isConnected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+                     </div>
+                   )}
+                </div>
+                <div className="text-[10px] uppercase tracking-[0.4em] text-slate-500 font-bold mt-1 flex items-center gap-2">
+                  <Activity className="w-3 h-3" />
+                  Grid Protocol Active
+                </div>
               </div>
 
               <button 
@@ -257,20 +292,20 @@ export default function App() {
               </button>
             </header>
 
-            <div className="mb-6 flex gap-4 items-center">
-              <div className={`px-6 py-2 rounded-lg border transition-all duration-300 ${xIsNext ? 'border-cyan-400/50 bg-cyan-400/10' : 'border-white/5 opacity-40'}`}>
-                <span className={`font-orbitron font-bold text-xl ${xIsNext ? 'neon-text-blue' : ''}`}>PLAYER X</span>
+            <div className="mb-8 flex gap-4 items-center scale-110">
+              <div className={`px-6 py-2 rounded-xl border-2 transition-all duration-500 ${xIsNext ? 'border-cyan-400 shadow-[0_0_15px_rgba(0,240,255,0.3)] bg-cyan-400/10' : 'border-white/5 opacity-40'}`}>
+                <span className={`font-orbitron font-bold text-xl ${xIsNext ? 'text-cyan-400' : 'text-slate-500'}`}>X</span>
               </div>
-              <div className="text-xl font-bold opacity-30 italic">VS</div>
-              <div className={`px-6 py-2 rounded-lg border transition-all duration-300 ${!xIsNext ? 'border-purple-400/50 bg-purple-400/10' : 'border-white/5 opacity-40'}`}>
-                <span className={`font-orbitron font-bold text-xl ${!xIsNext ? 'neon-text-purple' : ''}`}>PLAYER O</span>
+              <div className="w-2 h-2 rounded-full bg-white/10"></div>
+              <div className={`px-6 py-2 rounded-xl border-2 transition-all duration-500 ${!xIsNext ? 'border-purple-400 shadow-[0_0_15px_rgba(139,92,246,0.3)] bg-purple-400/10' : 'border-white/5 opacity-40'}`}>
+                <span className={`font-orbitron font-bold text-xl ${!xIsNext ? 'text-purple-400' : 'text-slate-500'}`}>O</span>
               </div>
             </div>
 
             {(mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') && (
-               <div className="mb-4 text-center">
-                  <span className={`text-sm font-semibold tracking-widest uppercase ${isMyTurn() ? 'text-green-400 animate-pulse' : 'text-slate-500'}`}>
-                    {isMyTurn() ? "Your Turn" : "Opponent's Turn"}
+               <div className="mb-6 h-6">
+                  <span className={`text-xs font-bold tracking-[0.3em] uppercase transition-all duration-300 ${isMyTurn() ? 'text-green-400 neon-text-green' : 'text-slate-600'}`}>
+                    {isMyTurn() ? ">> Your Turn to Strike <<" : "Opponent Tactical Phase..."}
                   </span>
                </div>
             )}
@@ -282,21 +317,24 @@ export default function App() {
               winner={winner}
             />
 
-            <div className="mt-10 flex gap-4 w-full justify-center">
+            <div className="mt-12 flex gap-4 w-full justify-center">
               <button
                 onClick={handleReset}
-                className="flex items-center gap-2 px-8 py-3 rounded-xl glass-panel border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all font-bold tracking-wider group"
+                className="flex items-center gap-2 px-10 py-4 rounded-2xl glass-panel border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/5 transition-all font-black tracking-widest font-orbitron text-xs group italic"
               >
-                <RotateCcw className="w-5 h-5 group-hover:rotate-[-180deg] transition-transform duration-500" />
-                RESTART
+                <RotateCcw className="w-4 h-4 group-hover:rotate-[-180deg] transition-transform duration-700" />
+                INIT RESTART
               </button>
               
               {(mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') && (
                 <button
                   onClick={() => setIsChatOpen(!isChatOpen)}
-                  className={`p-3 rounded-xl glass-panel border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all ${messages.length > 0 && !isChatOpen ? 'animate-pulse bg-purple-500/20' : ''}`}
+                  className={`p-4 rounded-2xl glass-panel border border-white/10 hover:border-purple-500/50 hover:bg-purple-500/5 transition-all relative ${messages.length > 0 && !isChatOpen ? 'animate-bounce' : ''}`}
                 >
                   <MessageSquare className={`w-6 h-6 ${isChatOpen ? 'text-white' : 'text-purple-400'}`} />
+                  {messages.length > 0 && !isChatOpen && (
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-ping" />
+                  )}
                 </button>
               )}
             </div>
@@ -304,23 +342,32 @@ export default function App() {
             <AnimatePresence>
               {winner && (
                 <motion.div 
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-xl"
                 >
-                  <div className="glass-panel p-10 rounded-3xl border border-white/20 text-center max-w-sm w-full mx-4 shadow-2xl">
-                    <Trophy className={`w-20 h-20 mx-auto mb-4 ${winner === 'X' ? 'text-cyan-400 drop-shadow-[0_0_15px_rgba(0,240,255,0.5)]' : winner === 'O' ? 'text-purple-400 drop-shadow-[0_0_15px_rgba(139,92,246,0.5)]' : 'text-slate-400'}`} />
-                    <h2 className="text-4xl font-black font-orbitron mb-2 tracking-tighter italic">
-                      {winner === 'DRAW' ? "SYSTEM DRAW" : `PLAYER ${winner} WINS`}
+                  <motion.div 
+                    initial={{ scale: 0.5, y: 50 }}
+                    animate={{ scale: 1, y: 0 }}
+                    className="glass-panel p-12 rounded-[2rem] border-2 border-white/10 text-center max-w-sm w-full mx-4 shadow-[0_0_50px_rgba(0,0,0,0.5)]"
+                  >
+                    <div className="mb-6 relative">
+                       <Trophy className={`w-24 h-24 mx-auto ${winner === 'X' ? 'text-cyan-400 drop-shadow-[0_0_20px_rgba(0,240,255,0.6)]' : winner === 'O' ? 'text-purple-400 drop-shadow-[0_0_20px_rgba(139,92,246,0.6)]' : 'text-slate-400'}`} />
+                       <div className="absolute inset-0 bg-white/5 blur-3xl rounded-full -z-10" />
+                    </div>
+                    <h2 className="text-5xl font-black font-orbitron mb-2 tracking-tighter italic bg-gradient-to-b from-white to-white/60 bg-clip-text text-transparent">
+                      {winner === 'DRAW' ? "DRAW" : "VICTORY"}
                     </h2>
-                    <p className="text-slate-400 mb-8 tracking-widest uppercase text-sm">Nexus match concluded</p>
+                    <p className="text-slate-500 mb-10 tracking-[0.4em] uppercase text-[10px] font-bold">
+                      {winner === 'DRAW' ? "Tactical Parity Reached" : `Player ${winner} has dominated the grid`}
+                    </p>
                     <button
                       onClick={handleReset}
-                      className="w-full py-4 rounded-xl bg-gradient-to-r from-cyan-500 to-purple-600 font-bold tracking-widest shadow-lg shadow-cyan-500/20 active:scale-95 transition-transform"
+                      className="w-full py-5 rounded-2xl bg-white text-slate-950 font-black font-orbitron tracking-widest text-xs hover:bg-cyan-400 hover:shadow-[0_0_20px_rgba(0,240,255,0.5)] transition-all active:scale-95 italic"
                     >
-                      PLAY AGAIN
+                      ENGAGE NEW ROUND
                     </button>
-                  </div>
+                  </motion.div>
                 </motion.div>
               )}
             </AnimatePresence>
