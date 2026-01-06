@@ -36,9 +36,50 @@ export default function App() {
     syncState
   } = useGameLogic();
 
+  // STALE CLOSURE FIX: Use refs to hold the latest game logic functions.
+  // PeerJS listeners are attached once and don't re-render, so they need 
+  // stable references to the latest state/functions.
+  const logicRefs = useRef({
+    makeMove,
+    resetGame,
+    syncState,
+    setMessages
+  });
+
+  // Keep refs updated with every render
+  useEffect(() => {
+    logicRefs.current = {
+      makeMove,
+      resetGame,
+      syncState,
+      setMessages
+    };
+  }, [makeMove, resetGame, syncState]);
+
   // PeerJS setup
   useEffect(() => {
-    // Check if Peer is defined (loaded from CDN)
+    const initializePeer = () => {
+      const peer = new Peer();
+      peerRef.current = peer;
+
+      peer.on('open', (id: string) => {
+        setPeerId(id);
+      });
+
+      peer.on('connection', (conn: any) => {
+        // If we already have a connection, close it before accepting a new one
+        if (connRef.current) connRef.current.close();
+        connRef.current = conn;
+        setLocalPlayer('X');
+        setMode('ONLINE_HOST');
+        setupConnectionListeners(conn);
+      });
+
+      peer.on('error', (err: any) => {
+        console.error('Peer error:', err);
+      });
+    };
+
     if (typeof Peer === 'undefined') {
       const checkPeer = setInterval(() => {
         if (typeof Peer !== 'undefined') {
@@ -51,23 +92,6 @@ export default function App() {
       initializePeer();
     }
 
-    function initializePeer() {
-      const peer = new Peer();
-      peerRef.current = peer;
-
-      peer.on('open', (id: string) => {
-        setPeerId(id);
-      });
-
-      peer.on('connection', (conn: any) => {
-        if (connRef.current) connRef.current.close();
-        connRef.current = conn;
-        setLocalPlayer('X');
-        setMode('ONLINE_HOST');
-        setupConnectionListeners(conn);
-      });
-    }
-
     return () => {
       if (peerRef.current) peerRef.current.destroy();
     };
@@ -76,33 +100,49 @@ export default function App() {
   const setupConnectionListeners = (conn: any) => {
     conn.on('open', () => {
       setIsConnected(true);
+      console.log('Connection established with peer');
     });
 
     conn.on('data', (data: NetworkMessage) => {
+      console.log('Received network data:', data);
       switch (data.type) {
         case 'MOVE':
-          makeMove(data.payload.index);
+          // Use the ref to ensure we call the latest makeMove function
+          logicRefs.current.makeMove(data.payload.index);
           break;
         case 'RESET':
-          resetGame();
+          logicRefs.current.resetGame();
           break;
         case 'CHAT':
-          setMessages(prev => [...prev, data.payload]);
+          logicRefs.current.setMessages(prev => [...prev, data.payload]);
           break;
         case 'SYNC_STATE':
-          syncState(data.payload);
+          logicRefs.current.syncState(data.payload);
           break;
       }
     });
 
     conn.on('close', () => {
+      console.log('Connection closed');
       setIsConnected(false);
       setMode('LOBBY');
+      connRef.current = null;
+    });
+
+    conn.on('error', (err: any) => {
+      console.error('Connection error:', err);
     });
   };
 
   const connectToPeer = () => {
     if (!remotePeerId || !peerRef.current) return;
+    
+    // Check if we are trying to connect to ourselves
+    if (remotePeerId === peerId) {
+      alert("You cannot connect to your own Terminal ID.");
+      return;
+    }
+
     const conn = peerRef.current.connect(remotePeerId);
     connRef.current = conn;
     setLocalPlayer('O');
@@ -111,13 +151,15 @@ export default function App() {
   };
 
   const handleSquareClick = (index: number) => {
+    // Basic turn checking for online modes
     if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
       const currentPlayerMark = xIsNext ? 'X' : 'O';
       if (currentPlayerMark !== localPlayer) return;
     }
 
-    const move = makeMove(index);
-    if (move && connRef.current) {
+    const moveResult = makeMove(index);
+    // If move was successful and we are in online mode, sync it
+    if (moveResult && connRef.current && connRef.current.open) {
       connRef.current.send({
         type: 'MOVE',
         payload: { index }
@@ -127,7 +169,7 @@ export default function App() {
 
   const handleReset = () => {
     resetGame();
-    if (connRef.current) {
+    if (connRef.current && connRef.current.open) {
       connRef.current.send({ type: 'RESET' });
     }
   };
@@ -140,8 +182,12 @@ export default function App() {
       text,
       timestamp: Date.now()
     };
+    
+    // Add to local UI
     setMessages(prev => [...prev, msg]);
-    if (connRef.current) {
+    
+    // Send to peer
+    if (connRef.current && connRef.current.open) {
       connRef.current.send({ type: 'CHAT', payload: msg });
     }
   };
@@ -154,6 +200,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col items-center justify-center p-4 relative overflow-hidden font-rajdhani">
+      {/* Background decorations */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/10 blur-[120px] rounded-full"></div>
 
@@ -167,7 +214,10 @@ export default function App() {
             className="w-full max-w-lg z-10"
           >
             <Lobby 
-              onSelectLocal={() => setMode('LOCAL')}
+              onSelectLocal={() => {
+                setLocalPlayer(null); // Reset for local
+                setMode('LOCAL');
+              }}
               onHost={() => {}}
               peerId={peerId}
               remoteId={remotePeerId}
@@ -185,7 +235,10 @@ export default function App() {
           >
             <header className="w-full flex justify-between items-center mb-8 px-4">
               <button 
-                onClick={() => setMode('LOBBY')}
+                onClick={() => {
+                  if (connRef.current) connRef.current.close();
+                  setMode('LOBBY');
+                }}
                 className="p-3 rounded-xl glass-panel hover:bg-white/10 transition-all group"
               >
                 <Home className="w-6 h-6 group-hover:text-blue-400 transition-colors" />
@@ -241,9 +294,9 @@ export default function App() {
               {(mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') && (
                 <button
                   onClick={() => setIsChatOpen(!isChatOpen)}
-                  className="p-3 rounded-xl glass-panel border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all"
+                  className={`p-3 rounded-xl glass-panel border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all ${messages.length > 0 && !isChatOpen ? 'animate-pulse bg-purple-500/20' : ''}`}
                 >
-                  <MessageSquare className="w-6 h-6 text-purple-400" />
+                  <MessageSquare className={`w-6 h-6 ${isChatOpen ? 'text-white' : 'text-purple-400'}`} />
                 </button>
               )}
             </div>
