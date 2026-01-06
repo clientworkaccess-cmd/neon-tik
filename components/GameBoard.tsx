@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { Square } from './Square';
-import { PlayerMark } from '../types';
+import { Square } from './Square.tsx';
+import { PlayerMark } from '../types.ts';
 
 interface GameBoardProps {
   board: PlayerMark[];
@@ -22,7 +22,6 @@ export const GameBoard: React.FC<GameBoardProps> = ({ board, onSquareClick, winn
         />
       ))}
       
-      {/* Decorative corners */}
       <div className="absolute -top-2 -left-2 w-6 h-6 border-t-2 border-l-2 border-cyan-500 opacity-50" />
       <div className="absolute -top-2 -right-2 w-6 h-6 border-t-2 border-r-2 border-purple-500 opacity-50" />
       <div className="absolute -bottom-2 -left-2 w-6 h-6 border-b-2 border-l-2 border-purple-500 opacity-50" />

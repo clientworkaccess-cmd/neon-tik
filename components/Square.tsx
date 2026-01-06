@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { motion } from 'framer-motion';
-import { PlayerMark } from '../types';
+import { PlayerMark } from '../types.ts';
 import { X, Circle } from 'lucide-react';
 
 interface SquareProps {

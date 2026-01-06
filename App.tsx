@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Lobby } from './components/Lobby';
-import { GameBoard } from './components/GameBoard';
-import { StatsModal } from './components/StatsModal';
-import { Chat } from './components/Chat';
-import { useGameLogic } from './hooks/useGameLogic';
-import { GameMode, ChatMessage, NetworkMessage } from './types';
-import { Trophy, Home, RotateCcw, BarChart3, MessageSquare, ShieldAlert } from 'lucide-react';
+import { Lobby } from './components/Lobby.tsx';
+import { GameBoard } from './components/GameBoard.tsx';
+import { StatsModal } from './components/StatsModal.tsx';
+import { Chat } from './components/Chat.tsx';
+import { useGameLogic } from './hooks/useGameLogic.ts';
+import { GameMode, ChatMessage, NetworkMessage } from './types.ts';
+import { Trophy, Home, RotateCcw, BarChart3, MessageSquare } from 'lucide-react';
 
 // Declaration for global PeerJS from CDN
 declare const Peer: any;
@@ -38,22 +38,35 @@ export default function App() {
 
   // PeerJS setup
   useEffect(() => {
-    if (typeof Peer === 'undefined') return;
+    // Check if Peer is defined (loaded from CDN)
+    if (typeof Peer === 'undefined') {
+      const checkPeer = setInterval(() => {
+        if (typeof Peer !== 'undefined') {
+          initializePeer();
+          clearInterval(checkPeer);
+        }
+      }, 100);
+      return () => clearInterval(checkPeer);
+    } else {
+      initializePeer();
+    }
 
-    const peer = new Peer();
-    peerRef.current = peer;
+    function initializePeer() {
+      const peer = new Peer();
+      peerRef.current = peer;
 
-    peer.on('open', (id: string) => {
-      setPeerId(id);
-    });
+      peer.on('open', (id: string) => {
+        setPeerId(id);
+      });
 
-    peer.on('connection', (conn: any) => {
-      if (connRef.current) connRef.current.close();
-      connRef.current = conn;
-      setLocalPlayer('X');
-      setMode('ONLINE_HOST');
-      setupConnectionListeners(conn);
-    });
+      peer.on('connection', (conn: any) => {
+        if (connRef.current) connRef.current.close();
+        connRef.current = conn;
+        setLocalPlayer('X');
+        setMode('ONLINE_HOST');
+        setupConnectionListeners(conn);
+      });
+    }
 
     return () => {
       if (peerRef.current) peerRef.current.destroy();
@@ -85,12 +98,11 @@ export default function App() {
     conn.on('close', () => {
       setIsConnected(false);
       setMode('LOBBY');
-      alert('Opponent disconnected.');
     });
   };
 
   const connectToPeer = () => {
-    if (!remotePeerId) return;
+    if (!remotePeerId || !peerRef.current) return;
     const conn = peerRef.current.connect(remotePeerId);
     connRef.current = conn;
     setLocalPlayer('O');
@@ -99,7 +111,6 @@ export default function App() {
   };
 
   const handleSquareClick = (index: number) => {
-    // Check if it's player's turn in online mode
     if (mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') {
       const currentPlayerMark = xIsNext ? 'X' : 'O';
       if (currentPlayerMark !== localPlayer) return;
@@ -124,7 +135,7 @@ export default function App() {
   const sendChatMessage = (text: string) => {
     if (!localPlayer) return;
     const msg: ChatMessage = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: Math.random().toString(36).substring(2, 11),
       sender: localPlayer,
       text,
       timestamp: Date.now()
@@ -143,7 +154,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col items-center justify-center p-4 relative overflow-hidden font-rajdhani">
-      {/* Background elements */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-500/10 blur-[120px] rounded-full"></div>
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-500/10 blur-[120px] rounded-full"></div>
 
@@ -158,7 +168,7 @@ export default function App() {
           >
             <Lobby 
               onSelectLocal={() => setMode('LOCAL')}
-              onHost={() => {}} // Hosting is handled by effect
+              onHost={() => {}}
               peerId={peerId}
               remoteId={remotePeerId}
               setRemoteId={setRemotePeerId}
@@ -181,9 +191,9 @@ export default function App() {
                 <Home className="w-6 h-6 group-hover:text-blue-400 transition-colors" />
               </button>
               
-              <div className="flex flex-col items-center">
+              <div className="flex flex-col items-center text-center">
                 <h1 className="text-2xl font-bold tracking-widest font-orbitron neon-text-blue">NEON NEXUS</h1>
-                <div className="text-xs uppercase tracking-[0.3em] opacity-50">Tic-Tac-Toe</div>
+                <div className="text-[10px] uppercase tracking-[0.3em] opacity-50">Grid Combat Protocol</div>
               </div>
 
               <button 
@@ -194,18 +204,16 @@ export default function App() {
               </button>
             </header>
 
-            {/* Game Status */}
             <div className="mb-6 flex gap-4 items-center">
               <div className={`px-6 py-2 rounded-lg border transition-all duration-300 ${xIsNext ? 'border-cyan-400/50 bg-cyan-400/10' : 'border-white/5 opacity-40'}`}>
                 <span className={`font-orbitron font-bold text-xl ${xIsNext ? 'neon-text-blue' : ''}`}>PLAYER X</span>
               </div>
-              <div className="text-xl font-bold opacity-30">VS</div>
+              <div className="text-xl font-bold opacity-30 italic">VS</div>
               <div className={`px-6 py-2 rounded-lg border transition-all duration-300 ${!xIsNext ? 'border-purple-400/50 bg-purple-400/10' : 'border-white/5 opacity-40'}`}>
                 <span className={`font-orbitron font-bold text-xl ${!xIsNext ? 'neon-text-purple' : ''}`}>PLAYER O</span>
               </div>
             </div>
 
-            {/* Turn Banner (Online Only) */}
             {(mode === 'ONLINE_HOST' || mode === 'ONLINE_JOIN') && (
                <div className="mb-4 text-center">
                   <span className={`text-sm font-semibold tracking-widest uppercase ${isMyTurn() ? 'text-green-400 animate-pulse' : 'text-slate-500'}`}>
@@ -240,7 +248,6 @@ export default function App() {
               )}
             </div>
 
-            {/* Winner Overlay */}
             <AnimatePresence>
               {winner && (
                 <motion.div 

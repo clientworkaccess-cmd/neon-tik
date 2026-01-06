@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, X, Terminal } from 'lucide-react';
-import { ChatMessage } from '../types';
+import { ChatMessage } from '../types.ts';
 
 interface ChatProps {
   isOpen: boolean;

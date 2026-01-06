@@ -1,7 +1,7 @@
 
 import { useState, useCallback } from 'react';
-import { PlayerMark, GameState } from '../types';
-import { WINNING_COMBINATIONS, INITIAL_BOARD } from '../constants';
+import { PlayerMark, GameState } from '../types.ts';
+import { WINNING_COMBINATIONS, INITIAL_BOARD } from '../constants.ts';
 
 export const useGameLogic = () => {
   const [board, setBoard] = useState<PlayerMark[]>(INITIAL_BOARD);
